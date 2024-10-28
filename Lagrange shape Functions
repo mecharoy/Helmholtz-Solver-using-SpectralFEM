@@ -1,0 +1,130 @@
+import numpy as np
+import scipy.special as sp
+import matplotlib.pyplot as plt
+
+def lagrange_basis(x, i, x_nodes):
+    n = len(x_nodes)
+    l = np.ones_like(x)
+    for j in range(n):
+        if j != i:
+            l *= (x - x_nodes[j]) / (x_nodes[i] - x_nodes[j])
+    return l
+
+def lagrange_basis_derivative(x, i, x_nodes):
+    n = len(x_nodes)
+    dl = np.zeros_like(x)
+    for k in range(n):
+        if k != i:
+            prod = 1.0 / (x_nodes[i] - x_nodes[k])
+            for j in range(n):
+                if j != i and j != k:
+                    prod *= (x - x_nodes[j]) / (x_nodes[i] - x_nodes[j])
+            dl += prod
+    return dl
+
+def shape_functions(xi, eta, order_x, order_y):
+    gll_x = gll_points(order_x + 1)
+    gll_y = gll_points(order_y + 1)
+
+    Lx = [lagrange_basis(xi, i, gll_x) for i in range(order_x + 1)]
+    Ly = [lagrange_basis(eta, j, gll_y) for j in range(order_y + 1)]
+
+    N = []
+    for j in range(order_y + 1):
+        for i in range(order_x + 1):
+            N.append(Lx[i] * Ly[j])
+
+    return np.array(N)
+
+def shape_function_derivatives(xi, eta, order_x, order_y):
+    gll_x = gll_points(order_x + 1)
+    gll_y = gll_points(order_y + 1)
+
+    Lx = [lagrange_basis(xi, i, gll_x) for i in range(order_x + 1)]
+    Ly = [lagrange_basis(eta, j, gll_y) for j in range(order_y + 1)]
+
+    dLx = [lagrange_basis_derivative(xi, i, gll_x) for i in range(order_x + 1)]
+    dLy = [lagrange_basis_derivative(eta, j, gll_y) for j in range(order_y + 1)]
+
+    dN_dxi = []
+    dN_deta = []
+    for j in range(order_y + 1):
+        for i in range(order_x + 1):
+            dN_dxi.append(dLx[i] * Ly[j])
+            dN_deta.append(Lx[i] * dLy[j])
+
+    return np.array(dN_dxi), np.array(dN_deta)
+
+def verify_shape_functions(mesh):
+    order_x, order_y = mesh.order_x, mesh.order_y
+    gll_x = gll_points(order_x + 1)
+    gll_y = gll_points(order_y + 1)
+
+    for elem_index, element in enumerate(mesh.elements):
+        # Property 1: Shape functions should be 1 at their own node and 0 at other nodes
+        for j, eta in enumerate(gll_y):
+            for i, xi in enumerate(gll_x):
+                local_index = j * (order_x + 1) + i
+                N = shape_functions(xi, eta, order_x, order_y)
+                assert np.isclose(N[local_index], 1), f"Element {elem_index}, Shape function {local_index} is not 1 at its own node"
+                assert np.allclose(np.delete(N, local_index), 0, atol=1e-10), f"Element {elem_index}, Shape function {local_index} is not 0 at other nodes"
+
+    # Property 2: Sum of shape functions should be 1 everywhere
+    xi = np.linspace(-1, 1, 100)
+    eta = np.linspace(-1, 1, 100)
+    XI, ETA = np.meshgrid(xi, eta)
+    N_sum = np.sum(shape_functions(XI, ETA, order_x, order_y), axis=0)
+    assert np.allclose(N_sum, 1), "Sum of shape functions is not 1 everywhere"
+
+    # Property 3: Derivatives should sum to 0
+    dN_dxi, dN_deta = shape_function_derivatives(XI, ETA, order_x, order_y)
+    assert np.allclose(np.sum(dN_dxi, axis=0), 0, atol=1e-10), "Sum of shape function derivatives w.r.t. xi is not 0"
+    assert np.allclose(np.sum(dN_deta, axis=0), 0, atol=1e-10), "Sum of shape function derivatives w.r.t. eta is not 0"
+
+    print("All shape function properties verified successfully!")
+
+def plot_shape_function(mesh, element_index, local_node_index):
+    xi = np.linspace(-1, 1, 100)
+    eta = np.linspace(-1, 1, 100)
+    XI, ETA = np.meshgrid(xi, eta)
+    N = shape_functions(XI, ETA, mesh.order_x, mesh.order_y)
+
+    plt.figure(figsize=(10, 8))
+    plt.contourf(XI, ETA, N[local_node_index], levels=20, cmap='viridis')
+    plt.colorbar(label='Shape function value')
+    plt.title(f'Shape function for element {element_index}, local node {local_node_index}')
+    plt.xlabel('xi')
+    plt.ylabel('eta')
+
+    # Plot node positions
+    gll_x = gll_points(mesh.order_x + 1)
+    gll_y = gll_points(mesh.order_y + 1)
+    node_xi, node_eta = np.meshgrid(gll_x, gll_y)
+    plt.scatter(node_xi, node_eta, color='red', s=30)
+
+    # Highlight the current node
+    current_node_x = node_xi.flatten()[local_node_index]
+    current_node_y = node_eta.flatten()[local_node_index]
+    plt.scatter(current_node_x, current_node_y, color='white', edgecolor='black', s=100)
+
+    plt.show()
+
+# Example usage
+if __name__ == "__main__":
+    
+    domain = [0, 1, 0, 1]  
+    nx = 25  # Number of elements in x-direction
+    ny = 4   # Number of elements in y-direction
+    order_x = 7  # Order in x-direction (4 nodes per edge)
+    order_y = 3  # Order in y-direction (4 nodes per edge)
+
+    mesh = Mesh2D(domain, nx, ny, order_x, order_y)
+    mesh.generate_mesh()
+
+    # Verify shape functions
+    verify_shape_functions(mesh)
+
+    # Plot shape functions for a few elements and nodes
+    for element_index in [0, 24, 50, 99]:  # Some sample elements
+        for local_node_index in [0, 5, 10, 15]:  # Some sample local nodes
+            plot_shape_function(mesh, element_index, local_node_index)
