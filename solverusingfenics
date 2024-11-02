@@ -1,0 +1,138 @@
+#Using library
+import numpy as np
+from dolfin import *
+import matplotlib.pyplot as plt
+
+def helmholtz_solver(mesh, k, f, degree=1):
+    V = FunctionSpace(mesh, "CG", degree)
+
+    # Define the variational problem
+    u = TrialFunction(V)
+    v = TestFunction(V)
+    a = inner(grad(u), grad(v))*dx - k**2*u*v*dx
+    L = f*v*dx
+
+    # Define the boundary condition (u = 0 on the boundary)
+    def boundary(x, on_boundary):
+        return on_boundary
+    bc = DirichletBC(V, Constant(0.0), boundary)
+
+    # Solve problem
+    u = Function(V)
+    solve(a == L, u, bc)
+
+    return u
+
+def error_estimator(u, mesh, k, f):
+    V = u.function_space()
+
+    # Compute residual
+    r = f + div(grad(u)) + k**2*u
+
+    # Compute error estimate
+    v = TestFunction(V)
+    error_form = r**2 * v * dx
+    error = assemble(error_form)
+
+    # Map error to cells
+    dofmap = V.dofmap()
+    error_cell = np.zeros(mesh.num_cells())
+    for cell in cells(mesh):
+        dofs = dofmap.cell_dofs(cell.index())
+        error_cell[cell.index()] = np.mean(error[dofs])
+
+    return error_cell
+
+def mark_elements(mesh, error, fraction=0.1):
+    sorted_cells = np.argsort(error)[::-1]
+    num_to_refine = int(fraction * len(sorted_cells))
+    return sorted_cells[:num_to_refine]
+
+def refine_mesh(mesh, cell_markers):
+    markers = MeshFunction("bool", mesh, mesh.topology().dim())
+    markers.set_all(False)
+    for cell in cell_markers:
+        markers[cell] = True
+    return refine(mesh, markers)
+
+def adaptive_solve(k, f, initial_mesh, max_iterations=10, tolerance=1e-3):
+    mesh = initial_mesh
+    degree = 1
+
+    for i in range(max_iterations):
+        print(f"Iteration {i+1}")
+        u = helmholtz_solver(mesh, k, f, degree)
+        error = error_estimator(u, mesh, k, f)
+
+        if np.max(error) < tolerance:
+            print("Converged!")
+            break
+
+        marked_cells = mark_elements(mesh, error)
+
+        # Decide between h-adaptivity and p-adaptivity (simple heuristic to balance the benefits of both methods)
+        if i % 2 == 0:  # h-adaptivity
+            mesh = refine_mesh(mesh, marked_cells)
+        else:  # p-adaptivity
+            degree += 1
+
+        print(f"Mesh size: {mesh.num_cells()}, Degree: {degree}")
+
+    return u, mesh
+
+def create_L_shaped_domain():
+    # Define mesh
+    mesh = RectangleMesh(Point(0, 0), Point(2, 2), 40, 40)
+
+    # Define a MeshFunction to mark the cells
+    cell_markers = MeshFunction("size_t", mesh, mesh.topology().dim())
+    cell_markers.set_all(0)
+
+    # Mark cells in the upper-right quadrant for removal
+    for cell in cells(mesh):
+        if cell.midpoint().x() > 1 and cell.midpoint().y() > 1:
+            cell_markers[cell] = 1
+
+    # Create submesh (L-shaped domain)
+    L_mesh = SubMesh(mesh, cell_markers, 0)
+
+    return L_mesh
+
+# Circular domain
+def create_circular_domain(radius=1.0, resolution=32):
+    """
+    Creates a circular mesh using mshr library.
+
+    Parameters:
+    radius (float): Radius of the circle (default 1.0)
+    resolution (int): The number of cells (default 32)
+
+    Returns:
+    Mesh: FEniCS mesh of a circular domain.
+    """
+    # Define the circular domain using mshr
+    center = Point(0, 0)  # Center of the circle at origin
+    circle = mshr.Circle(center, radius)
+
+    # Generate the mesh with the specified resolution
+    mesh = mshr.generate_mesh(circle, resolution)
+
+    return mesh
+
+# Example usage
+mesh = create_circular_domain()
+k = Constant(5.0)
+f = Expression("exp(-((x[0]-0.25)*(x[0]-0.25) + (x[1]-0.25)*(x[1]-0.25))/0.05) + " +
+               "exp(-((x[0]-0.75)*(x[0]-0.75) + (x[1]-0.75)*(x[1]-0.75))/0.05)", degree=5)
+
+u, final_mesh = adaptive_solve(k, f, mesh)
+
+# Plot solution
+plot(u)
+plt.title("Solution")
+plt.show()
+
+# Plot mesh
+plot(final_mesh)
+plt.title("Final Mesh")
+plt.show()
